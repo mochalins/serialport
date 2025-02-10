@@ -147,7 +147,7 @@ pub const Iterator = struct {
     pub fn next(self: *@This()) !?serialport.Stub {
         var result: serialport.Stub = undefined;
         while (try self.iterator.next()) |entry| {
-            if (entry.kind != .file) continue;
+            if (entry.kind != .character_device) continue;
             if (entry.name.len < 4) continue;
             if (!std.mem.eql(u8, "tty.", entry.name[0..4])) continue;
 
