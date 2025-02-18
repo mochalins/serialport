@@ -29,6 +29,9 @@ pub const BaudRate = b: {
 
 pub fn open(path: []const u8) !std.fs.File {
     var result = try std.fs.cwd().openFile(path, .{
+        // .lock_nonblocking and .lock necessary to not block on openFile
+        .lock_nonblocking = true,
+        .lock = .exclusive,
         .mode = .read_write,
         .allow_ctty = false,
     });
