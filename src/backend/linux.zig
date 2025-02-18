@@ -27,14 +27,8 @@ pub const BaudRate = b: {
     break :b @Type(std.builtin.Type{ .@"enum" = baud_rate_ti });
 };
 
-pub fn open(path: []const u8) !std.fs.File {
-    var result = try std.fs.cwd().openFile(path, .{
-        // .lock_nonblocking and .lock necessary to not block on openFile
-        .lock_nonblocking = true,
-        .lock = .exclusive,
-        .mode = .read_write,
-        .allow_ctty = false,
-    });
+pub fn open(path: []const u8, flags: std.fs.File.OpenFlags) !std.fs.File {
+    var result = try std.fs.cwd().openFile(path, flags);
     errdefer result.close();
 
     var fl_flags = try std.posix.fcntl(result.handle, std.posix.F.GETFL, 0);
@@ -290,7 +284,7 @@ fn openVirtualPorts(
         @cInclude("unistd.h");
     });
 
-    master_port.* = try open("/dev/ptmx");
+    master_port.* = try open("/dev/ptmx", .{ .mode = .read_write });
     errdefer master_port.close();
 
     if (c.grantpt(master_port.handle) < 0 or
@@ -303,7 +297,10 @@ fn openVirtualPorts(
     if (slave_name_len == 0)
         return error.SlavePseudoTerminalSetupError;
 
-    slave_port.* = try open(slave_name[0..slave_name_len]);
+    slave_port.* = try open(
+        slave_name[0..slave_name_len],
+        .{ .mode = .read_write },
+    );
 }
 
 test "software flow control" {

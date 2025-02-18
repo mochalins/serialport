@@ -13,10 +13,10 @@ pub fn iterate() !Iterator {
     }
 }
 
-pub fn open(file_path: []const u8) !Port {
+pub fn open(file_path: []const u8, flags: std.fs.File.OpenFlags) !Port {
     return switch (builtin.target.os.tag) {
         .linux, .macos, .windows => .{ ._impl = .{
-            .file = try backend.open(file_path),
+            .file = try backend.open(file_path, flags),
         } },
         else => @compileError("unsupported OS"),
     };
@@ -215,8 +215,8 @@ pub const Stub = struct {
     name: []const u8,
     path: []const u8,
 
-    pub fn open(self: @This()) !Port {
-        return serialport.open(self.path);
+    pub fn open(self: @This(), flags: std.fs.File.OpenFlags) !Port {
+        return serialport.open(self.path, flags);
     }
 };
 

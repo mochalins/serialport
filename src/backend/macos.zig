@@ -4,14 +4,8 @@ const c = @cImport({
     @cInclude("termios.h");
 });
 
-pub fn open(path: []const u8) !std.fs.File {
-    var result = try std.fs.cwd().openFile(path, .{
-        // .lock_nonblocking and .lock necessary to not block on openFile
-        .lock_nonblocking = true,
-        .lock = .exclusive,
-        .mode = .read_write,
-        .allow_ctty = false,
-    });
+pub fn open(path: []const u8, flags: std.fs.File.OpenFlags) !std.fs.File {
+    var result = try std.fs.cwd().openFile(path, flags);
     errdefer result.close();
 
     var fl_flags = try std.posix.fcntl(result.handle, std.posix.F.GETFL, 0);

@@ -49,12 +49,17 @@ pub const Writer = std.io.GenericWriter(
     writeFn,
 );
 
-pub fn open(path: []const u8) !std.fs.File {
+pub fn open(path: []const u8, flags: std.fs.File.OpenFlags) !std.fs.File {
     const path_w = try windows.sliceToPrefixedFileW(std.fs.cwd().fd, path);
+    // TODO: Support other flags
     const result: std.fs.File = .{
         .handle = windows.kernel32.CreateFileW(
             path_w.span(),
-            windows.GENERIC_READ | windows.GENERIC_WRITE,
+            switch (flags.mode) {
+                .read_only => windows.GENERIC_READ,
+                .write_only => windows.GENERIC_WRITE,
+                .read_write => windows.GENERIC_READ | windows.GENERIC_WRITE,
+            },
             0,
             null,
             windows.OPEN_EXISTING,
