@@ -156,8 +156,12 @@ pub const Iterator = struct {
                 entry.name[4..],
             );
             result.name = self.name_buffer[0 .. entry.name.len - 4];
-            @memcpy(self.path_buffer[0..entry.name.len], entry.name);
-            result.path = self.path_buffer[0..entry.name.len];
+            @memcpy(self.path_buffer[0..5], "/dev/");
+            @memcpy(self.path_buffer[5 .. 5 + entry.name.len], entry.name);
+            result.path = try std.fs.realpath(
+                self.path_buffer[0 .. entry.name.len + 5],
+                &self.path_buffer,
+            );
             return result;
         } else return null;
     }
