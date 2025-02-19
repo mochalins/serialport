@@ -145,14 +145,14 @@ pub const Iterator = struct {
         var result: serialport.Stub = undefined;
         while (try self.iterator.next()) |entry| {
             if (entry.kind != .character_device) continue;
-            if (entry.name.len < 4) continue;
-            if (!std.mem.eql(u8, "tty.", entry.name[0..4])) continue;
+            if (entry.name.len < 3) continue;
+            if (!std.mem.eql(u8, "cu.", entry.name[0..3])) continue;
 
             @memcpy(
-                self.name_buffer[0 .. entry.name.len - 4],
-                entry.name[4..],
+                self.name_buffer[0 .. entry.name.len - 3],
+                entry.name[3..],
             );
-            result.name = self.name_buffer[0 .. entry.name.len - 4];
+            result.name = self.name_buffer[0 .. entry.name.len - 3];
             @memcpy(self.path_buffer[0..5], "/dev/");
             @memcpy(self.path_buffer[5 .. 5 + entry.name.len], entry.name);
             result.path = try std.fs.realpath(
