@@ -5,9 +5,6 @@
 Cross-platform serial port library, with convenient poll/read/write interface.
 Kept up to date to work with latest Zig master branch.
 
-The Windows/Linux backends are exercised in certain corporate dev tools, and
-thus are somewhat reliable. MacOS backend is not actively tested.
-
 ## Todo
 
 - [ ] Support flow control status check
@@ -37,7 +34,15 @@ while (try it.next()) |stub| {
 
 ```zig
 // ...
-var port = try serialport.open(my_port_path);
+var port = try serialport.open(my_port_path, .{ .mode = .read_write });
+// Typical serial port use cases will often want exclusive lock of the port.
+// Use `lock_nonblocking` field to immediately return an open failure if the
+// port is currently being used, rather than blocking and waiting to open.
+port = try serialport.open(my_port_path, .{
+  .mode = .read_write,
+  .lock = .exclusive,
+  .lock_nonblocking = true,
+});
 defer port.close();
 
 try port.configure(.{
