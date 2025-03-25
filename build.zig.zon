@@ -1,7 +1,8 @@
 .{
-    .name = "serialport",
+    .name = .serialport,
     .version = "0.1.0",
-    .minimum_zig_version = "0.14.0-dev.1586+41330c96a",
+    .fingerprint = 0xe5e4c9be883af1c3,
+    .minimum_zig_version = "0.14.0",
     .dependencies = .{},
     .paths = .{
         "build.zig",
