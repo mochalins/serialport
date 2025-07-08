@@ -15,15 +15,20 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    if (target.result.os.tag == .windows) {
+        mod.linkSystemLibrary("advapi32", .{});
+    }
 
     const test_step = b.step("test", "Run unit tests");
-
     const mod_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/serialport.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
-    mod_unit_tests.root_module.link_libc = true;
+    if (target.result.os.tag == .windows) {
+        mod_unit_tests.root_module.linkSystemLibrary("advapi32", .{});
+    }
     const run_mod_unit_tests = b.addRunArtifact(mod_unit_tests);
     test_step.dependOn(&run_mod_unit_tests.step);
 
@@ -50,6 +55,7 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("src/lib.zig"),
                 .target = target,
                 .optimize = optimize,
+                .link_libc = true,
             });
             lib_unit_tests.root_module.addImport("serialport", mod);
             const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
