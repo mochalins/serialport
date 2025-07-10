@@ -109,28 +109,26 @@ pub const Port = struct {
     pub fn poll(self: *@This()) !bool {
         switch (comptime builtin.target.os.tag) {
             .linux, .macos => return backend.poll(self._impl.file),
-            .windows => {
-                return windows.poll(
-                    self._impl.file,
-                    &self._impl.poll_continuation,
-                );
-            },
+            .windows => return windows.poll(
+                self._impl.file,
+                &self._impl.poll_continuation,
+            ),
             else => @compileError("unsupported OS"),
         }
     }
 
-    pub fn reader(self: @This()) Reader {
+    pub fn reader(self: @This(), buffer: []u8) Reader {
         switch (comptime builtin.target.os.tag) {
-            .linux, .macos => return self._impl.file.reader(),
-            .windows => return windows.reader(self._impl.file),
+            .linux, .macos => return self._impl.file.reader(buffer),
+            .windows => return windows.reader(self._impl.file, buffer),
             else => @compileError("unsupported OS"),
         }
     }
 
-    pub fn writer(self: @This()) Writer {
+    pub fn writer(self: @This(), buffer: []u8) Writer {
         switch (comptime builtin.target.os.tag) {
-            .linux, .macos => return self._impl.file.writer(),
-            .windows => return windows.writer(self._impl.file),
+            .linux, .macos => return self._impl.file.writer(buffer),
+            .windows => return windows.writer(self._impl.file, buffer),
             else => @compileError("unsupported OS"),
         }
     }

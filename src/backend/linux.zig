@@ -320,30 +320,27 @@ test "software flow control" {
     const orig_slave = try configure(slave, config);
     defer std.posix.tcsetattr(slave.handle, .NOW, orig_slave) catch {};
 
-    const writer_m = master.writer();
-    const reader_s = slave.reader();
-
     try std.testing.expectEqual(false, try poll(slave));
-    try std.testing.expectEqual(12, try writer_m.write("test message"));
+    try std.testing.expectEqual(12, try master.write("test message"));
     try std.testing.expectEqual(true, try poll(slave));
 
     var buffer: [16]u8 = undefined;
-    try std.testing.expectEqual(12, try reader_s.read(&buffer));
+    try std.testing.expectEqual(12, try slave.read(&buffer));
     try std.testing.expectEqualSlices(u8, "test message", buffer[0..12]);
     try std.testing.expectEqual(false, try poll(slave));
 
-    try std.testing.expectEqual(12, try writer_m.write("test message"));
+    try std.testing.expectEqual(12, try master.write("test message"));
     try std.testing.expectEqual(true, try poll(slave));
 
     var small_buffer: [8]u8 = undefined;
-    try std.testing.expectEqual(8, try reader_s.read(&small_buffer));
+    try std.testing.expectEqual(8, try slave.read(&small_buffer));
     try std.testing.expectEqualSlices(u8, "test mes", &small_buffer);
     try std.testing.expectEqual(true, try poll(slave));
-    try std.testing.expectEqual(4, try reader_s.read(&small_buffer));
+    try std.testing.expectEqual(4, try slave.read(&small_buffer));
     try std.testing.expectEqualSlices(u8, "sage", small_buffer[0..4]);
     try std.testing.expectEqual(false, try poll(slave));
 
-    try std.testing.expectEqual(12, try writer_m.write("test message"));
+    try std.testing.expectEqual(12, try master.write("test message"));
     try std.testing.expectEqual(true, try poll(slave));
     try flush(slave, .{ .input = true });
     try std.testing.expectEqual(false, try poll(slave));
@@ -362,30 +359,27 @@ test {
     const orig_slave = try configure(slave, config);
     defer std.posix.tcsetattr(slave.handle, .NOW, orig_slave) catch {};
 
-    const writer_m = master.writer();
-    const reader_s = slave.reader();
-
     try std.testing.expectEqual(false, try poll(slave));
-    try std.testing.expectEqual(12, try writer_m.write("test message"));
+    try std.testing.expectEqual(12, try master.write("test message"));
     try std.testing.expectEqual(true, try poll(slave));
 
     var buffer: [16]u8 = undefined;
-    try std.testing.expectEqual(12, try reader_s.read(&buffer));
+    try std.testing.expectEqual(12, try slave.read(&buffer));
     try std.testing.expectEqualSlices(u8, "test message", buffer[0..12]);
     try std.testing.expectEqual(false, try poll(slave));
 
-    try std.testing.expectEqual(12, try writer_m.write("test message"));
+    try std.testing.expectEqual(12, try master.write("test message"));
     try std.testing.expectEqual(true, try poll(slave));
 
     var small_buffer: [8]u8 = undefined;
-    try std.testing.expectEqual(8, try reader_s.read(&small_buffer));
+    try std.testing.expectEqual(8, try slave.read(&small_buffer));
     try std.testing.expectEqualSlices(u8, "test mes", &small_buffer);
     try std.testing.expectEqual(true, try poll(slave));
-    try std.testing.expectEqual(4, try reader_s.read(&small_buffer));
+    try std.testing.expectEqual(4, try slave.read(&small_buffer));
     try std.testing.expectEqualSlices(u8, "sage", small_buffer[0..4]);
     try std.testing.expectEqual(false, try poll(slave));
 
-    try std.testing.expectEqual(12, try writer_m.write("test message"));
+    try std.testing.expectEqual(12, try master.write("test message"));
     try std.testing.expectEqual(true, try poll(slave));
     try flush(slave, .{ .input = true });
     try std.testing.expectEqual(false, try poll(slave));
@@ -404,9 +398,8 @@ test "nonblock read" {
     const orig_slave = try configure(slave, config);
     defer std.posix.tcsetattr(slave.handle, .NOW, orig_slave) catch {};
 
-    var read_buffer: [16]u8 = undefined;
-    const reader_s = slave.reader();
-    try std.testing.expectEqual(0, try reader_s.read(&read_buffer));
+    var result: [16]u8 = undefined;
+    try std.testing.expectEqual(0, try slave.read(&result));
 }
 
 test "custom baud rate" {
@@ -422,30 +415,27 @@ test "custom baud rate" {
     const orig_slave = try configure(slave, config);
     defer std.posix.tcsetattr(slave.handle, .NOW, orig_slave) catch {};
 
-    const writer_m = master.writer();
-    const reader_s = slave.reader();
-
     try std.testing.expectEqual(false, try poll(slave));
-    try std.testing.expectEqual(12, try writer_m.write("test message"));
+    try std.testing.expectEqual(12, try master.write("test message"));
     try std.testing.expectEqual(true, try poll(slave));
 
     var buffer: [16]u8 = undefined;
-    try std.testing.expectEqual(12, try reader_s.read(&buffer));
+    try std.testing.expectEqual(12, try slave.read(&buffer));
     try std.testing.expectEqualSlices(u8, "test message", buffer[0..12]);
     try std.testing.expectEqual(false, try poll(slave));
 
-    try std.testing.expectEqual(12, try writer_m.write("test message"));
+    try std.testing.expectEqual(12, try master.write("test message"));
     try std.testing.expectEqual(true, try poll(slave));
 
     var small_buffer: [8]u8 = undefined;
-    try std.testing.expectEqual(8, try reader_s.read(&small_buffer));
+    try std.testing.expectEqual(8, try slave.read(&small_buffer));
     try std.testing.expectEqualSlices(u8, "test mes", &small_buffer);
     try std.testing.expectEqual(true, try poll(slave));
-    try std.testing.expectEqual(4, try reader_s.read(&small_buffer));
+    try std.testing.expectEqual(4, try slave.read(&small_buffer));
     try std.testing.expectEqualSlices(u8, "sage", small_buffer[0..4]);
     try std.testing.expectEqual(false, try poll(slave));
 
-    try std.testing.expectEqual(12, try writer_m.write("test message"));
+    try std.testing.expectEqual(12, try master.write("test message"));
     try std.testing.expectEqual(true, try poll(slave));
     try flush(slave, .{ .input = true });
     try std.testing.expectEqual(false, try poll(slave));
