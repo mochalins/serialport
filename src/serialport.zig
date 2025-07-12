@@ -231,15 +231,15 @@ const backend = switch (builtin.target.os.tag) {
 };
 
 test {
-    std.testing.refAllDeclsRecursive(Port);
-    std.testing.refAllDeclsRecursive(Iterator);
-    std.testing.refAllDeclsRecursive(Stub);
+    std.testing.refAllDecls(Port);
+    std.testing.refAllDecls(Iterator);
+    std.testing.refAllDecls(Stub);
     _ = try iterate();
 
     switch (builtin.target.os.tag) {
-        .linux => std.testing.refAllDeclsRecursive(linux),
-        .macos => std.testing.refAllDeclsRecursive(macos),
-        .windows => std.testing.refAllDeclsRecursive(windows),
+        .linux => std.testing.refAllDecls(linux),
+        .macos => std.testing.refAllDecls(macos),
+        .windows => std.testing.refAllDecls(windows),
         else => @compileError("unsupported OS"),
     }
 }
