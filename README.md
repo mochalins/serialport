@@ -49,17 +49,19 @@ try port.configure(.{
   .baud_rate = .B115200,
 });
 
-const reader = port.reader();
+// Increase buffer size >1 to make a buffered reader.
+var reader_buffer: [1]u8 = undefined;
+var reader = port.reader(&reader_buffer);
 
-var read_buffer: [128]u8 = undefined;
+var result_buffer: [128]u8 = undefined;
 const timeout = 1_000 * std.time.ns_per_ms;
 
 var timer = try std.time.Timer.start();
 // Keep polling and reading until no bytes arrive for 1000ms.
 while (timer.read() < timeout) {
   if (try port.poll()) {
-    const read_size = try reader.read(&read_buffer);
-    std.log.info("Port bytes arrived: {any}", .{read_buffer[0..read_size]});
+    const read_size = try reader.interface.readSliceShort(&result_buffer);
+    std.log.info("Port bytes arrived: {any}", .{result_buffer[0..read_size]});
     timer.reset();
   }
 }
