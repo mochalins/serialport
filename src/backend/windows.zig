@@ -33,21 +33,19 @@ pub const ReadError =
     windows.OpenError ||
     windows.Wtf8ToPrefixedFileWError ||
     windows.WaitForSingleObjectError;
-pub const Reader = std.io.GenericReader(
-    ReadContext,
-    ReadError,
-    readFn,
-);
+pub const Reader = struct {
+    context: std.fs.File,
+    interface: std.Io.Reader,
+};
 pub const WriteError =
     windows.WriteFileError ||
     windows.OpenError ||
     windows.Wtf8ToPrefixedFileWError ||
     windows.WaitForSingleObjectError;
-pub const Writer = std.io.GenericWriter(
-    WriteContext,
-    WriteError,
-    writeFn,
-);
+pub const Writer = struct {
+    context: std.fs.File,
+    interface: std.Io.Writer,
+};
 
 pub fn open(path: []const u8, flags: std.fs.File.OpenFlags) !std.fs.File {
     const path_w = try windows.sliceToPrefixedFileW(std.fs.cwd().fd, path);
@@ -189,12 +187,31 @@ pub fn poll(port: std.fs.File, continuation: *?PollContinuation) !bool {
     }
 }
 
-pub fn reader(port: std.fs.File) Reader {
-    return .{ .context = port };
+pub fn reader(port: std.fs.File, buffer: []u8) Reader {
+    return .{
+        .context = port,
+        .interface = .{
+            .buffer = buffer,
+            .seek = 0,
+            .end = 0,
+            .vtable = &.{
+                .stream = stream,
+                .discard = discard,
+            },
+        },
+    };
 }
 
-pub fn writer(port: std.fs.File) Writer {
-    return .{ .context = port };
+pub fn writer(port: std.fs.File, buffer: []u8) Writer {
+    return .{
+        .context = port,
+        .interface = .{
+            .buffer = buffer,
+            .vtable = &.{
+                .drain = drain,
+            },
+        },
+    };
 }
 
 pub fn iterate() !Iterator {
@@ -242,7 +259,10 @@ pub fn iterate() !Iterator {
         KEY_READ,
         &result.key,
     ) != 0) {
-        return windows.unexpectedError(windows.GetLastError());
+        switch (windows.GetLastError()) {
+            windows.Win32Error.SUCCESS => {},
+            else => |e| return windows.unexpectedError(e),
+        }
     }
 
     return result;
@@ -290,8 +310,13 @@ pub const Iterator = struct {
     }
 };
 
-const ReadContext = std.fs.File;
-fn readFn(context: ReadContext, buffer: []u8) ReadError!usize {
+fn stream(
+    r: *std.Io.Reader,
+    w: *std.Io.Writer,
+    limit: std.Io.Limit,
+) std.Io.Reader.StreamError!usize {
+    if (!limit.nonzero()) return 0;
+    const port_reader: *Reader = @fieldParentPtr("interface", r);
     var overlapped: windows.OVERLAPPED = .{
         .Internal = 0,
         .InternalHigh = 0,
@@ -301,29 +326,35 @@ fn readFn(context: ReadContext, buffer: []u8) ReadError!usize {
                 .OffsetHigh = 0,
             },
         },
-        .hEvent = try windows.CreateEventEx(
+        .hEvent = windows.CreateEventEx(
             null,
             "",
             windows.CREATE_EVENT_MANUAL_RESET,
             windows.EVENT_ALL_ACCESS,
-        ),
+        ) catch return error.ReadFailed,
     };
+
+    var unbuffered: [1]u8 = undefined;
+    const buf = limit.slice(if (w.buffer.len > 0)
+        try w.writableSliceGreedy(1)
+    else
+        &unbuffered);
 
     const want_read_count: windows.DWORD = @min(
         @as(windows.DWORD, std.math.maxInt(windows.DWORD)),
-        buffer.len,
+        buf.len,
     );
     var read_amount: windows.DWORD = undefined;
     if (windows.kernel32.ReadFile(
-        context.handle,
-        buffer.ptr,
+        port_reader.context.handle,
+        buf.ptr,
         want_read_count,
         &read_amount,
         &overlapped,
     ) == 0) {
         switch (windows.GetLastError()) {
             windows.Win32Error.IO_PENDING => {},
-            else => |e| return windows.unexpectedError(e),
+            else => return error.ReadFailed,
         }
     } else {
         return read_amount;
@@ -331,7 +362,7 @@ fn readFn(context: ReadContext, buffer: []u8) ReadError!usize {
 
     var async_read_amount: windows.DWORD = undefined;
     if (windows.kernel32.GetOverlappedResult(
-        context.handle,
+        port_reader.context.handle,
         &overlapped,
         &async_read_amount,
         0,
@@ -339,7 +370,7 @@ fn readFn(context: ReadContext, buffer: []u8) ReadError!usize {
         return async_read_amount;
     }
     if (windows.kernel32.GetOverlappedResult(
-        context.handle,
+        port_reader.context.handle,
         &overlapped,
         &async_read_amount,
         1,
@@ -348,14 +379,113 @@ fn readFn(context: ReadContext, buffer: []u8) ReadError!usize {
             .HANDLE_EOF => {
                 return async_read_amount;
             },
-            else => |e| return windows.unexpectedError(e),
+            else => return error.ReadFailed,
         }
     }
     return async_read_amount;
 }
 
-const WriteContext = std.fs.File;
-fn writeFn(context: WriteContext, bytes: []const u8) WriteError!usize {
+fn discard(r: *std.Io.Reader, limit: std.Io.Limit) std.Io.Reader.Error!usize {
+    if (!limit.nonzero()) return 0;
+    const port_reader: *Reader = @fieldParentPtr("interface", r);
+    var overlapped: windows.OVERLAPPED = .{
+        .Internal = 0,
+        .InternalHigh = 0,
+        .DUMMYUNIONNAME = .{
+            .DUMMYSTRUCTNAME = .{
+                .Offset = 0,
+                .OffsetHigh = 0,
+            },
+        },
+        .hEvent = windows.CreateEventEx(
+            null,
+            "",
+            windows.CREATE_EVENT_MANUAL_RESET,
+            windows.EVENT_ALL_ACCESS,
+        ) catch return error.ReadFailed,
+    };
+
+    var ignore_buf: [1]u8 = undefined;
+    var read_amount: windows.DWORD = undefined;
+    if (windows.kernel32.ReadFile(
+        port_reader.context.handle,
+        &ignore_buf,
+        1,
+        &read_amount,
+        &overlapped,
+    ) == 0) {
+        switch (windows.GetLastError()) {
+            windows.Win32Error.IO_PENDING => {},
+            else => return error.ReadFailed,
+        }
+    } else {
+        return read_amount;
+    }
+
+    var async_read_amount: windows.DWORD = undefined;
+    if (windows.kernel32.GetOverlappedResult(
+        port_reader.context.handle,
+        &overlapped,
+        &async_read_amount,
+        0,
+    ) != 0) {
+        return async_read_amount;
+    }
+    if (windows.kernel32.GetOverlappedResult(
+        port_reader.context.handle,
+        &overlapped,
+        &async_read_amount,
+        1,
+    ) == 0) {
+        switch (windows.GetLastError()) {
+            .HANDLE_EOF => {
+                return async_read_amount;
+            },
+            else => return error.ReadFailed,
+        }
+    }
+    return async_read_amount;
+}
+
+fn drain(
+    w: *std.Io.Writer,
+    data: []const []const u8,
+    splat: usize,
+) std.Io.Writer.Error!usize {
+    const port_writer: *Writer = @fieldParentPtr("interface", w);
+
+    while (w.end > 0) {
+        const drained = drainBuffer(
+            port_writer.context,
+            w.buffer[0..w.end],
+        ) catch return error.WriteFailed;
+        if (drained == 0) return 0;
+        w.end -= drained;
+    }
+
+    var written: usize = 0;
+    for (data[0 .. data.len - 1]) |bytes| {
+        const drained = drainBuffer(port_writer.context, bytes) catch
+            return error.WriteFailed;
+        if (drained == 0) return written;
+        written += drained;
+    }
+
+    const pattern = data[data.len - 1];
+    if (pattern.len == 0) return written;
+    for (0..splat) |_| {
+        const drained = drainBuffer(port_writer.context, pattern) catch
+            return error.WriteFailed;
+        if (drained == 0) return written;
+        written += drained;
+    }
+    return written;
+}
+
+fn drainBuffer(
+    context: std.fs.File,
+    bytes: []const u8,
+) !usize {
     var bytes_written: windows.DWORD = undefined;
     var overlapped: windows.OVERLAPPED = .{
         .Internal = 0,
@@ -503,34 +633,34 @@ const ComStat = extern struct {
 extern "kernel32" fn SetCommState(
     hFile: windows.HANDLE,
     lpDCB: *DCB,
-) callconv(windows.WINAPI) windows.BOOL;
+) callconv(.winapi) windows.BOOL;
 
 extern "kernel32" fn GetCommState(
     hFile: windows.HANDLE,
     lpDCB: *DCB,
-) callconv(windows.WINAPI) windows.BOOL;
+) callconv(.winapi) windows.BOOL;
 
 extern "kernel32" fn SetCommMask(
     hFile: windows.HANDLE,
     dwEvtMask: EventMask,
-) callconv(windows.WINAPI) windows.BOOL;
+) callconv(.winapi) windows.BOOL;
 
 extern "kernel32" fn SetCommTimeouts(
     hFile: windows.HANDLE,
     lpCommTimeouts: *const CommTimeouts,
-) callconv(windows.WINAPI) windows.BOOL;
+) callconv(.winapi) windows.BOOL;
 
 extern "kernel32" fn WaitCommEvent(
     hFile: windows.HANDLE,
     lpEvtMask: *EventMask,
     lpOverlapped: ?*windows.OVERLAPPED,
-) callconv(windows.WINAPI) windows.BOOL;
+) callconv(.winapi) windows.BOOL;
 
 extern "kernel32" fn ClearCommError(
     hFile: windows.HANDLE,
     lpErrors: ?*ErrorsMask,
     lpStat: ?*ComStat,
-) callconv(windows.WINAPI) windows.BOOL;
+) callconv(.winapi) windows.BOOL;
 
 extern "kernel32" fn PurgeComm(
     hFile: windows.HANDLE,
@@ -541,7 +671,7 @@ extern "kernel32" fn PurgeComm(
         PURGE_RXCLEAR: bool = false,
         _: u28 = 0,
     },
-) callconv(windows.WINAPI) windows.BOOL;
+) callconv(.winapi) windows.BOOL;
 
 extern "advapi32" fn RegEnumValueA(
     hKey: windows.HKEY,
@@ -552,4 +682,4 @@ extern "advapi32" fn RegEnumValueA(
     lpType: ?*windows.DWORD,
     lpData: [*]windows.BYTE,
     lpcbData: *windows.DWORD,
-) callconv(std.os.windows.WINAPI) std.os.windows.LSTATUS;
+) callconv(.winapi) std.os.windows.LSTATUS;
