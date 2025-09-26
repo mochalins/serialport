@@ -3,7 +3,7 @@
 ![Linux Port Iteration Result](assets/Linux_Iteration_Demo.png)
 
 Cross-platform serial port library, with convenient poll/read/write interface.
-Kept up to date to work with latest Zig master branch.
+Kept up to date to work with latest Zig stable release (0.15.1).
 
 ## Todo
 
