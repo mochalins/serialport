@@ -2,7 +2,10 @@
 
 ![Linux Port Iteration Result](assets/Linux_Iteration_Demo.png)
 
-Cross-platform serial port library, with convenient poll/read/write interface.
+Cross-platform serial port library, adhering to the standard library's reader
+and writer interface. All poll (peek) and flush (discard/flush) operations are
+accessible through `std.Io.Reader` and `std.Io.Writer` respectively.
+
 Kept up to date to work with latest Zig stable release (0.15.1).
 
 ## Todo
@@ -59,11 +62,19 @@ const timeout = 1_000 * std.time.ns_per_ms;
 var timer = try std.time.Timer.start();
 // Keep polling and reading until no bytes arrive for 1000ms.
 while (timer.read() < timeout) {
-  if (try port.poll()) {
-    const read_size = try reader.interface.readSliceShort(&result_buffer);
-    std.log.info("Port bytes arrived: {any}", .{result_buffer[0..read_size]});
-    timer.reset();
-  }
+  // Standard reader's "peek" functions replace the function of poll.
+  _ = reader.interface.peekByte() catch |e| switch(e) {
+    error.EndOfStream => continue,
+    else => return e,
+  };
+
+  // ...
+
+  // Or, you can directly attempt a read and loop if no bytes are found.
+  const read_size = try reader.interface.readSliceShort(&result_buffer);
+  if (read_size == 0) continue;
+  std.log.info("Port bytes arrived: {any}", .{result_buffer[0..read_size]});
+  timer.reset();
 }
 // ...
 ```

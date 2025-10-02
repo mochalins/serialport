@@ -90,42 +90,6 @@ pub fn configureFlowControl(
     termios.iflag.IXOFF = flow_control == .software;
 }
 
-pub fn flush(port: std.fs.File, options: serialport.FlushOptions) !void {
-    if (!options.input and !options.output) return;
-    const result = c.tcflush(
-        port.handle,
-        if (options.input and options.output)
-            c.TCIOFLUSH
-        else if (options.input)
-            c.TCIFLUSH
-        else
-            c.TCOFLUSH,
-    );
-    return switch (std.posix.errno(result)) {
-        .SUCCESS => {},
-        .BADF => error.FileNotFound,
-        .NOTTY => error.FileNotTty,
-        else => unreachable,
-    };
-}
-
-pub fn poll(port: std.fs.File) !bool {
-    var pollfds: [1]std.posix.pollfd = .{
-        .{
-            .fd = port.handle,
-            .events = std.posix.POLL.IN,
-            .revents = undefined,
-        },
-    };
-    if (try std.posix.poll(&pollfds, 0) == 0) return false;
-    if (pollfds[0].revents & std.posix.POLL.IN == 0) return false;
-
-    const err_mask = std.posix.POLL.ERR | std.posix.POLL.NVAL |
-        std.posix.POLL.HUP;
-    if (pollfds[0].revents & err_mask != 0) return false;
-    return true;
-}
-
 pub fn iterate() !Iterator {
     var result: Iterator = .{
         .dir = try std.fs.cwd().openDir("/dev", .{ .iterate = true }),
