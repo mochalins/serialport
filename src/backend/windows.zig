@@ -22,12 +22,6 @@ pub const BaudRate = enum(windows.DWORD) {
     _,
 };
 
-/// Reused structures necessary between non-blocking poll calls.
-pub const PollContinuation = struct {
-    events: EventMask,
-    overlapped: windows.OVERLAPPED,
-};
-
 pub const ReadError =
     windows.ReadFileError ||
     windows.OpenError ||
@@ -115,75 +109,6 @@ pub fn configure(port: std.fs.File, config: serialport.Config) !void {
     };
     if (SetCommTimeouts(port.handle, &timeouts) == 0) {
         return windows.unexpectedError(windows.GetLastError());
-    }
-}
-
-pub fn flush(port: std.fs.File, options: serialport.FlushOptions) !void {
-    if (!options.input and !options.output) return;
-    if (PurgeComm(port.handle, .{
-        .PURGE_TXCLEAR = options.output,
-        .PURGE_RXCLEAR = options.input,
-    }) == 0) {
-        return windows.unexpectedError(windows.GetLastError());
-    }
-}
-
-pub fn poll(port: std.fs.File, continuation: *?PollContinuation) !bool {
-    var comstat: ComStat = undefined;
-    if (ClearCommError(port.handle, null, &comstat) == 0) {
-        return windows.unexpectedError(windows.GetLastError());
-    }
-    if (comstat.cbInQue > 0) return true;
-
-    if (continuation.*) |*cont| {
-        if (windows.GetOverlappedResult(
-            port.handle,
-            &cont.overlapped,
-            false,
-        ) catch |e| switch (e) {
-            error.WouldBlock => return false,
-            else => return e,
-        } != 0) {
-            const was_rx = cont.events.RXCHAR;
-            continuation.* = null;
-            return was_rx;
-        } else {
-            switch (windows.GetLastError()) {
-                windows.Win32Error.IO_PENDING => return false,
-                else => |e| return windows.unexpectedError(e),
-            }
-        }
-    } else {
-        continuation.* = .{
-            .events = undefined,
-            .overlapped = .{
-                .Internal = 0,
-                .InternalHigh = 0,
-                .DUMMYUNIONNAME = .{
-                    .DUMMYSTRUCTNAME = .{
-                        .Offset = 0,
-                        .OffsetHigh = 0,
-                    },
-                },
-                .hEvent = try windows.CreateEventEx(
-                    null,
-                    "",
-                    windows.CREATE_EVENT_MANUAL_RESET,
-                    windows.EVENT_ALL_ACCESS,
-                ),
-            },
-        };
-        if (WaitCommEvent(
-            port.handle,
-            &continuation.*.?.events,
-            &continuation.*.?.overlapped,
-        ) == 0) {
-            switch (windows.GetLastError()) {
-                windows.Win32Error.IO_PENDING => return false,
-                else => |e| return windows.unexpectedError(e),
-            }
-        }
-        return continuation.*.?.events.RXCHAR;
     }
 }
 

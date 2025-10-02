@@ -29,7 +29,6 @@ const PortImpl = switch (builtin.target.os.tag) {
     },
     .windows => struct {
         file: std.fs.File,
-        poll_continuation: ?windows.PollContinuation = null,
     },
     else => @compileError("unsupported OS"),
 };
@@ -96,30 +95,9 @@ pub const Port = struct {
         }
     }
 
-    pub fn flush(self: *@This(), options: FlushOptions) !void {
-        switch (comptime builtin.target.os.tag) {
-            .linux, .macos, .windows => try backend.flush(
-                self._impl.file,
-                options,
-            ),
-            else => @compileError("unsupported OS"),
-        }
-    }
-
-    pub fn poll(self: *@This()) !bool {
-        switch (comptime builtin.target.os.tag) {
-            .linux, .macos => return backend.poll(self._impl.file),
-            .windows => return windows.poll(
-                self._impl.file,
-                &self._impl.poll_continuation,
-            ),
-            else => @compileError("unsupported OS"),
-        }
-    }
-
     pub fn reader(self: @This(), buffer: []u8) Reader {
         switch (comptime builtin.target.os.tag) {
-            .linux, .macos => return self._impl.file.reader(buffer),
+            .linux, .macos => return self._impl.file.readerStreaming(buffer),
             .windows => return windows.reader(self._impl.file, buffer),
             else => @compileError("unsupported OS"),
         }
@@ -127,7 +105,7 @@ pub const Port = struct {
 
     pub fn writer(self: @This(), buffer: []u8) Writer {
         switch (comptime builtin.target.os.tag) {
-            .linux, .macos => return self._impl.file.writer(buffer),
+            .linux, .macos => return self._impl.file.writerStreaming(buffer),
             .windows => return windows.writer(self._impl.file, buffer),
             else => @compileError("unsupported OS"),
         }

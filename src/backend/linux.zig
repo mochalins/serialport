@@ -166,62 +166,6 @@ pub fn configureFlowControl(
     termios.iflag.IXOFF = flow_control == .software;
 }
 
-pub fn flush(port: std.fs.File, options: serialport.FlushOptions) !void {
-    if (!options.input and !options.output) return;
-
-    const TCIFLUSH = 0;
-    const TCOFLUSH = 1;
-    const TCIOFLUSH = 2;
-    const TCFLSH = 0x540B;
-
-    const result = linux.syscall3(
-        .ioctl,
-        @bitCast(@as(isize, @intCast(port.handle))),
-        TCFLSH,
-        if (options.input and options.output)
-            TCIOFLUSH
-        else if (options.input)
-            TCIFLUSH
-        else
-            TCOFLUSH,
-    );
-    // Use `linux.E.init` rather than `std.posix.errno`, as `std.posix.errno`
-    // abstraction will not be set by syscall if libc is linked
-    return switch (linux.E.init(result)) {
-        .SUCCESS => {},
-        .BADF => error.FileNotFound,
-        .NOTTY => error.FileNotTty,
-        else => unreachable,
-    };
-}
-
-test "flush error handling" {
-    var f: std.fs.File = try std.fs.cwd().createFile("temp.txt", .{});
-    defer std.fs.cwd().deleteFile("temp.txt") catch {};
-    defer f.close();
-
-    try std.testing.expectError(
-        error.FileNotTty,
-        flush(f, .{ .input = true, .output = true }),
-    );
-}
-
-pub fn poll(port: std.fs.File) !bool {
-    var pollfds: [1]linux.pollfd = .{.{
-        .fd = port.handle,
-        .events = linux.POLL.IN,
-        .revents = undefined,
-    }};
-    if (linux.poll(&pollfds, 1, 0) == 0) return false;
-
-    if (pollfds[0].revents & linux.POLL.IN == 0) return false;
-
-    const err_mask = linux.POLL.ERR | linux.POLL.NVAL | linux.POLL.HUP;
-    if (pollfds[0].revents & err_mask != 0) return false;
-
-    return true;
-}
-
 pub fn iterate() !Iterator {
     var result: Iterator = .{
         .dir = std.fs.cwd().openDir(
@@ -320,30 +264,52 @@ test "software flow control" {
     const orig_slave = try configure(slave, config);
     defer std.posix.tcsetattr(slave.handle, .NOW, orig_slave) catch {};
 
-    try std.testing.expectEqual(false, try poll(slave));
-    try std.testing.expectEqual(12, try master.write("test message"));
-    try std.testing.expectEqual(true, try poll(slave));
+    var master_w = master.writerStreaming(&.{});
+    var reader_buf: [128]u8 = undefined;
+    var slave_r = slave.readerStreaming(&reader_buf);
+
+    try std.testing.expectError(
+        error.EndOfStream,
+        slave_r.interface.peekByte(),
+    );
+    try master_w.interface.writeAll("test message");
+    try std.testing.expectEqual('t', try slave_r.interface.peekByte());
 
     var buffer: [16]u8 = undefined;
-    try std.testing.expectEqual(12, try slave.read(&buffer));
+    try std.testing.expectEqual(
+        12,
+        try slave_r.interface.readSliceShort(&buffer),
+    );
     try std.testing.expectEqualSlices(u8, "test message", buffer[0..12]);
-    try std.testing.expectEqual(false, try poll(slave));
+    try std.testing.expectError(
+        error.EndOfStream,
+        slave_r.interface.peekByte(),
+    );
 
-    try std.testing.expectEqual(12, try master.write("test message"));
-    try std.testing.expectEqual(true, try poll(slave));
+    try master_w.interface.writeAll("test message");
+    try std.testing.expectEqual('t', try slave_r.interface.peekByte());
 
     var small_buffer: [8]u8 = undefined;
-    try std.testing.expectEqual(8, try slave.read(&small_buffer));
+    try slave_r.interface.readSliceAll(&small_buffer);
     try std.testing.expectEqualSlices(u8, "test mes", &small_buffer);
-    try std.testing.expectEqual(true, try poll(slave));
-    try std.testing.expectEqual(4, try slave.read(&small_buffer));
+    try std.testing.expectEqual('s', try slave_r.interface.peekByte());
+    try std.testing.expectEqual(
+        4,
+        try slave_r.interface.readSliceShort(&small_buffer),
+    );
     try std.testing.expectEqualSlices(u8, "sage", small_buffer[0..4]);
-    try std.testing.expectEqual(false, try poll(slave));
+    try std.testing.expectEqual(
+        error.EndOfStream,
+        slave_r.interface.peekByte(),
+    );
 
-    try std.testing.expectEqual(12, try master.write("test message"));
-    try std.testing.expectEqual(true, try poll(slave));
-    try flush(slave, .{ .input = true });
-    try std.testing.expectEqual(false, try poll(slave));
+    try master_w.interface.writeAll("test message");
+    try std.testing.expectEqual('t', try slave_r.interface.peekByte());
+    try std.testing.expectEqual(12, try slave_r.interface.discardRemaining());
+    try std.testing.expectEqual(
+        error.EndOfStream,
+        slave_r.interface.peekByte(),
+    );
 }
 
 test {
@@ -359,30 +325,51 @@ test {
     const orig_slave = try configure(slave, config);
     defer std.posix.tcsetattr(slave.handle, .NOW, orig_slave) catch {};
 
-    try std.testing.expectEqual(false, try poll(slave));
-    try std.testing.expectEqual(12, try master.write("test message"));
-    try std.testing.expectEqual(true, try poll(slave));
+    var master_w = master.writerStreaming(&.{});
+    var reader_buf: [128]u8 = undefined;
+    var slave_r = slave.readerStreaming(&reader_buf);
+
+    try std.testing.expectError(
+        error.EndOfStream,
+        slave_r.interface.peekByte(),
+    );
+    try master_w.interface.writeAll("test message");
+    try std.testing.expectEqual('t', try slave_r.interface.peekByte());
 
     var buffer: [16]u8 = undefined;
-    try std.testing.expectEqual(12, try slave.read(&buffer));
+    try std.testing.expectEqual(
+        12,
+        try slave_r.interface.readSliceShort(&buffer),
+    );
     try std.testing.expectEqualSlices(u8, "test message", buffer[0..12]);
-    try std.testing.expectEqual(false, try poll(slave));
-
-    try std.testing.expectEqual(12, try master.write("test message"));
-    try std.testing.expectEqual(true, try poll(slave));
+    try std.testing.expectError(
+        error.EndOfStream,
+        slave_r.interface.peekByte(),
+    );
+    try master_w.interface.writeAll("test message");
+    try std.testing.expectEqual('t', slave_r.interface.peekByte());
 
     var small_buffer: [8]u8 = undefined;
-    try std.testing.expectEqual(8, try slave.read(&small_buffer));
+    try slave_r.interface.readSliceAll(&small_buffer);
     try std.testing.expectEqualSlices(u8, "test mes", &small_buffer);
-    try std.testing.expectEqual(true, try poll(slave));
-    try std.testing.expectEqual(4, try slave.read(&small_buffer));
+    try std.testing.expectEqual('s', slave_r.interface.peekByte());
+    try std.testing.expectEqual(
+        4,
+        slave_r.interface.readSliceShort(&small_buffer),
+    );
     try std.testing.expectEqualSlices(u8, "sage", small_buffer[0..4]);
-    try std.testing.expectEqual(false, try poll(slave));
+    try std.testing.expectError(
+        error.EndOfStream,
+        slave_r.interface.peekByte(),
+    );
 
-    try std.testing.expectEqual(12, try master.write("test message"));
-    try std.testing.expectEqual(true, try poll(slave));
-    try flush(slave, .{ .input = true });
-    try std.testing.expectEqual(false, try poll(slave));
+    try master_w.interface.writeAll("test message");
+    try std.testing.expectEqual('t', try slave_r.interface.peekByte());
+    try std.testing.expectEqual(12, try slave_r.interface.discardRemaining());
+    try std.testing.expectError(
+        error.EndOfStream,
+        slave_r.interface.peekByte(),
+    );
 }
 
 test "nonblock read" {
@@ -398,8 +385,14 @@ test "nonblock read" {
     const orig_slave = try configure(slave, config);
     defer std.posix.tcsetattr(slave.handle, .NOW, orig_slave) catch {};
 
+    var reader_buf: [128]u8 = undefined;
+    var slave_r = slave.readerStreaming(&reader_buf);
+
     var result: [16]u8 = undefined;
-    try std.testing.expectEqual(0, try slave.read(&result));
+    try std.testing.expectEqual(
+        0,
+        try slave_r.interface.readSliceShort(&result),
+    );
 }
 
 test "custom baud rate" {
@@ -415,28 +408,53 @@ test "custom baud rate" {
     const orig_slave = try configure(slave, config);
     defer std.posix.tcsetattr(slave.handle, .NOW, orig_slave) catch {};
 
-    try std.testing.expectEqual(false, try poll(slave));
-    try std.testing.expectEqual(12, try master.write("test message"));
-    try std.testing.expectEqual(true, try poll(slave));
+    var master_w = master.writerStreaming(&.{});
+    var reader_buf: [128]u8 = undefined;
+    var slave_r = slave.readerStreaming(&reader_buf);
+
+    try std.testing.expectError(
+        error.EndOfStream,
+        slave_r.interface.peekByte(),
+    );
+    try master_w.interface.writeAll("test message");
+    try std.testing.expectEqual('t', slave_r.interface.peekByte());
 
     var buffer: [16]u8 = undefined;
-    try std.testing.expectEqual(12, try slave.read(&buffer));
+    try std.testing.expectEqual(
+        12,
+        try slave_r.interface.readSliceShort(&buffer),
+    );
     try std.testing.expectEqualSlices(u8, "test message", buffer[0..12]);
-    try std.testing.expectEqual(false, try poll(slave));
+    try std.testing.expectEqual(
+        error.EndOfStream,
+        slave_r.interface.peekByte(),
+    );
 
-    try std.testing.expectEqual(12, try master.write("test message"));
-    try std.testing.expectEqual(true, try poll(slave));
+    try master_w.interface.writeAll("test message");
+    try std.testing.expectEqual('t', try slave_r.interface.peekByte());
 
     var small_buffer: [8]u8 = undefined;
-    try std.testing.expectEqual(8, try slave.read(&small_buffer));
+    try std.testing.expectEqual(
+        8,
+        try slave_r.interface.readSliceShort(&small_buffer),
+    );
     try std.testing.expectEqualSlices(u8, "test mes", &small_buffer);
-    try std.testing.expectEqual(true, try poll(slave));
-    try std.testing.expectEqual(4, try slave.read(&small_buffer));
+    try std.testing.expectEqual('s', try slave_r.interface.peekByte());
+    try std.testing.expectEqual(
+        4,
+        try slave_r.interface.readSliceShort(&small_buffer),
+    );
     try std.testing.expectEqualSlices(u8, "sage", small_buffer[0..4]);
-    try std.testing.expectEqual(false, try poll(slave));
+    try std.testing.expectError(
+        error.EndOfStream,
+        slave_r.interface.peekByte(),
+    );
 
-    try std.testing.expectEqual(12, try master.write("test message"));
-    try std.testing.expectEqual(true, try poll(slave));
-    try flush(slave, .{ .input = true });
-    try std.testing.expectEqual(false, try poll(slave));
+    try master_w.interface.writeAll("test message");
+    try std.testing.expectEqual('t', try slave_r.interface.peekByte());
+    try std.testing.expectEqual(12, try slave_r.interface.discardRemaining());
+    try std.testing.expectError(
+        error.EndOfStream,
+        slave_r.interface.peekByte(),
+    );
 }
