@@ -119,10 +119,7 @@ pub fn reader(port: std.fs.File, buffer: []u8) Reader {
             .buffer = buffer,
             .seek = 0,
             .end = 0,
-            .vtable = &.{
-                .stream = stream,
-                .discard = discard,
-            },
+            .vtable = &.{ .stream = stream },
         },
     };
 }
@@ -279,8 +276,13 @@ fn stream(
     ) == 0) {
         switch (windows.GetLastError()) {
             windows.Win32Error.IO_PENDING => {},
-            else => return error.ReadFailed,
+            else => {
+                return error.ReadFailed;
+            },
         }
+    } else if (read_amount == 0) {
+        // Must return EOS when there are no bytes left.
+        return error.EndOfStream;
     } else {
         return read_amount;
     }
@@ -292,6 +294,10 @@ fn stream(
         &async_read_amount,
         0,
     ) != 0) {
+        if (async_read_amount == 0) {
+            // Must return EOS when there are no bytes left.
+            return error.EndOfStream;
+        }
         return async_read_amount;
     }
     if (windows.kernel32.GetOverlappedResult(
@@ -302,72 +308,16 @@ fn stream(
     ) == 0) {
         switch (windows.GetLastError()) {
             .HANDLE_EOF => {
-                return async_read_amount;
+                return error.EndOfStream;
             },
-            else => return error.ReadFailed,
+            else => {
+                return error.ReadFailed;
+            },
         }
     }
-    return async_read_amount;
-}
-
-fn discard(r: *std.Io.Reader, limit: std.Io.Limit) std.Io.Reader.Error!usize {
-    if (!limit.nonzero()) return 0;
-    const port_reader: *Reader = @fieldParentPtr("interface", r);
-    var overlapped: windows.OVERLAPPED = .{
-        .Internal = 0,
-        .InternalHigh = 0,
-        .DUMMYUNIONNAME = .{
-            .DUMMYSTRUCTNAME = .{
-                .Offset = 0,
-                .OffsetHigh = 0,
-            },
-        },
-        .hEvent = windows.CreateEventEx(
-            null,
-            "",
-            windows.CREATE_EVENT_MANUAL_RESET,
-            windows.EVENT_ALL_ACCESS,
-        ) catch return error.ReadFailed,
-    };
-
-    var ignore_buf: [1]u8 = undefined;
-    var read_amount: windows.DWORD = undefined;
-    if (windows.kernel32.ReadFile(
-        port_reader.context.handle,
-        &ignore_buf,
-        1,
-        &read_amount,
-        &overlapped,
-    ) == 0) {
-        switch (windows.GetLastError()) {
-            windows.Win32Error.IO_PENDING => {},
-            else => return error.ReadFailed,
-        }
-    } else {
-        return read_amount;
-    }
-
-    var async_read_amount: windows.DWORD = undefined;
-    if (windows.kernel32.GetOverlappedResult(
-        port_reader.context.handle,
-        &overlapped,
-        &async_read_amount,
-        0,
-    ) != 0) {
-        return async_read_amount;
-    }
-    if (windows.kernel32.GetOverlappedResult(
-        port_reader.context.handle,
-        &overlapped,
-        &async_read_amount,
-        1,
-    ) == 0) {
-        switch (windows.GetLastError()) {
-            .HANDLE_EOF => {
-                return async_read_amount;
-            },
-            else => return error.ReadFailed,
-        }
+    if (async_read_amount == 0) {
+        // Must return EOS when there are no bytes left.
+        return error.EndOfStream;
     }
     return async_read_amount;
 }
