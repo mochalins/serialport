@@ -29,6 +29,8 @@ pub const ReadError =
     windows.WaitForSingleObjectError;
 pub const Reader = struct {
     context: std.fs.File,
+    /// Last error encountered by interface.
+    err: ?windows.Win32Error = null,
     interface: std.Io.Reader,
 };
 pub const WriteError =
@@ -38,6 +40,8 @@ pub const WriteError =
     windows.WaitForSingleObjectError;
 pub const Writer = struct {
     context: std.fs.File,
+    /// Last error encountered by interface.
+    err: ?windows.Win32Error = null,
     interface: std.Io.Writer,
 };
 
@@ -253,12 +257,24 @@ fn stream(
             "",
             windows.CREATE_EVENT_MANUAL_RESET,
             windows.EVENT_ALL_ACCESS,
-        ) catch return error.ReadFailed,
+        ) catch |e| {
+            port_reader.err = switch (e) {
+                error.AccessDenied => .ACCESS_DENIED,
+                error.BadPathName => .BAD_PATHNAME,
+                error.FileNotFound => .FILE_NOT_FOUND,
+                error.InvalidWtf8, error.NameTooLong => .BAD_PATHNAME,
+                error.Unexpected => windows.GetLastError(),
+            };
+            return error.ReadFailed;
+        },
     };
 
     var unbuffered: [1]u8 = undefined;
     const buf = limit.slice(if (w.buffer.len > 0)
-        try w.writableSliceGreedy(1)
+        w.writableSliceGreedy(1) catch |e| {
+            port_reader.err = null;
+            return e;
+        }
     else
         &unbuffered);
 
@@ -276,12 +292,14 @@ fn stream(
     ) == 0) {
         switch (windows.GetLastError()) {
             windows.Win32Error.IO_PENDING => {},
-            else => {
+            else => |e| {
+                port_reader.err = e;
                 return error.ReadFailed;
             },
         }
     } else if (read_amount == 0) {
         // Must return EOS when there are no bytes left.
+        port_reader.err = null;
         return error.EndOfStream;
     } else {
         return read_amount;
@@ -296,6 +314,7 @@ fn stream(
     ) != 0) {
         if (async_read_amount == 0) {
             // Must return EOS when there are no bytes left.
+            port_reader.err = null;
             return error.EndOfStream;
         }
         return async_read_amount;
@@ -308,15 +327,18 @@ fn stream(
     ) == 0) {
         switch (windows.GetLastError()) {
             .HANDLE_EOF => {
+                port_reader.err = null;
                 return error.EndOfStream;
             },
-            else => {
+            else => |e| {
+                port_reader.err = e;
                 return error.ReadFailed;
             },
         }
     }
     if (async_read_amount == 0) {
         // Must return EOS when there are no bytes left.
+        port_reader.err = null;
         return error.EndOfStream;
     }
     return async_read_amount;
@@ -330,17 +352,15 @@ fn drain(
     const port_writer: *Writer = @fieldParentPtr("interface", w);
 
     while (w.end > 0) {
-        const drained = drainBuffer(
-            port_writer.context,
-            w.buffer[0..w.end],
-        ) catch return error.WriteFailed;
+        const drained = drainBuffer(port_writer, w.buffer[0..w.end]) catch
+            return error.WriteFailed;
         if (drained == 0) return 0;
         w.end -= drained;
     }
 
     var written: usize = 0;
     for (data[0 .. data.len - 1]) |bytes| {
-        const drained = drainBuffer(port_writer.context, bytes) catch
+        const drained = drainBuffer(port_writer, bytes) catch
             return error.WriteFailed;
         if (drained == 0) return written;
         written += drained;
@@ -349,7 +369,7 @@ fn drain(
     const pattern = data[data.len - 1];
     if (pattern.len == 0) return written;
     for (0..splat) |_| {
-        const drained = drainBuffer(port_writer.context, pattern) catch
+        const drained = drainBuffer(port_writer, pattern) catch
             return error.WriteFailed;
         if (drained == 0) return written;
         written += drained;
@@ -358,7 +378,7 @@ fn drain(
 }
 
 fn drainBuffer(
-    context: std.fs.File,
+    port_writer: *Writer,
     bytes: []const u8,
 ) !usize {
     var bytes_written: windows.DWORD = undefined;
@@ -371,25 +391,35 @@ fn drainBuffer(
                 .OffsetHigh = 0,
             },
         },
-        .hEvent = try windows.CreateEventEx(
+        .hEvent = windows.CreateEventEx(
             null,
             "",
             windows.CREATE_EVENT_MANUAL_RESET,
             windows.EVENT_ALL_ACCESS,
-        ),
+        ) catch |e| {
+            port_writer.err = switch (e) {
+                error.AccessDenied => .ACCESS_DENIED,
+                error.BadPathName => .BAD_PATHNAME,
+                error.FileNotFound => .FILE_NOT_FOUND,
+                error.InvalidWtf8, error.NameTooLong => .BAD_PATHNAME,
+                error.Unexpected => windows.GetLastError(),
+            };
+            return error.ReadFailed;
+        },
     };
     defer windows.CloseHandle(overlapped.hEvent.?);
     const adjusted_len =
         std.math.cast(u32, bytes.len) orelse std.math.maxInt(u32);
 
     if (windows.kernel32.WriteFile(
-        context.handle,
+        port_writer.context.handle,
         bytes.ptr,
         adjusted_len,
         &bytes_written,
         &overlapped,
     ) == 0) {
-        switch (windows.GetLastError()) {
+        port_writer.err = windows.GetLastError();
+        switch (port_writer.err.?) {
             .INVALID_USER_BUFFER => return error.SystemResources,
             .NOT_ENOUGH_MEMORY => return error.SystemResources,
             .OPERATION_ABORTED => return error.OperationAborted,
@@ -400,7 +430,7 @@ fn drainBuffer(
                     windows.INFINITE,
                 );
                 const amount_written = try windows.GetOverlappedResult(
-                    context.handle,
+                    port_writer.context.handle,
                     &overlapped,
                     true,
                 );
