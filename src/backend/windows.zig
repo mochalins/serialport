@@ -1,6 +1,7 @@
 const std = @import("std");
-const serialport = @import("../serialport.zig");
 const windows = std.os.windows;
+
+const serialport = @import("../serialport.zig");
 
 /// Windows baud rate table, sourced from Microsoft `DCB` documentation in
 /// `win32`'s `winbase.h`. Non-exhaustive enum to allow for custom baud rate
@@ -268,7 +269,7 @@ fn stream(
             return error.ReadFailed;
         },
     };
-
+    defer windows.CloseHandle(overlapped.hEvent.?);
     var unbuffered: [1]u8 = undefined;
     const buf = limit.slice(if (w.buffer.len > 0)
         w.writableSliceGreedy(1) catch |e| {
