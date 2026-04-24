@@ -5,17 +5,12 @@ const linux = std.os.linux;
 
 pub const BaudRate = b: {
     const ti = @typeInfo(linux.speed_t).@"enum";
-    var baud_rate_ti: std.builtin.Type.Enum = .{
-        .tag_type = ti.tag_type,
-        .fields = undefined,
-        .decls = &.{},
-        .is_exhaustive = false,
-    };
-    var fields: [ti.fields.len]std.builtin.Type.EnumField = undefined;
     @setEvalBranchQuota(3_874);
+    var field_names: [ti.fields.len][]const u8 = undefined;
+    var field_values: [ti.fields.len]ti.tag_type = undefined;
     for (ti.fields, 0..) |field, i| {
-        fields[i].name = field.name;
-        fields[i].value = std.fmt.parseInt(
+        field_names[i] = field.name;
+        field_values[i] = std.fmt.parseInt(
             ti.tag_type,
             field.name[1..],
             10,
@@ -23,23 +18,25 @@ pub const BaudRate = b: {
             @compileError("invalid baud rate tag");
         };
     }
-    baud_rate_ti.fields = &fields;
-    break :b @Type(std.builtin.Type{ .@"enum" = baud_rate_ti });
+    break :b @Enum(ti.tag_type, .nonexhaustive, &field_names, &field_values);
 };
 
-pub fn open(path: []const u8, flags: std.fs.File.OpenFlags) !std.fs.File {
-    var result = try std.fs.cwd().openFile(path, flags);
+pub fn open(
+    io: std.Io,
+    path: []const u8,
+    flags: std.Io.File.OpenFlags,
+) std.Io.File.OpenError!std.Io.File {
+    var result = try std.Io.Dir.cwd().openFile(io, path, flags);
     errdefer result.close();
-
-    var fl_flags = try std.posix.fcntl(result.handle, std.posix.F.GETFL, 0);
+    var fl_flags = std.os.linux.fcntl(result.handle, std.os.linux.F.GETFL, 0);
     fl_flags |= @as(usize, 1 << @bitOffsetOf(std.posix.O, "NONBLOCK"));
-    _ = try std.posix.fcntl(result.handle, std.posix.F.SETFL, fl_flags);
+    _ = std.os.linux.fcntl(result.handle, std.os.linux.F.SETFL, 0);
     return result;
 }
 
 /// Configure serial port. Returns original `termios` settings on success.
 pub fn configure(
-    port: std.fs.File,
+    port: std.Io.File,
     config: serialport.Config,
 ) !linux.termios {
     var settings = try std.posix.tcgetattr(port.handle);
@@ -166,9 +163,10 @@ pub fn configureFlowControl(
     termios.iflag.IXOFF = flow_control == .software;
 }
 
-pub fn iterate() !Iterator {
+pub fn iterate(io: std.Io) !Iterator {
     var result: Iterator = .{
-        .dir = std.fs.cwd().openDir(
+        .dir = std.Io.Dir.cwd().openDir(
+            io,
             "/dev/serial/by-id",
             .{ .iterate = true },
         ) catch |e| switch (e) {
@@ -184,42 +182,45 @@ pub fn iterate() !Iterator {
 }
 
 pub const Iterator = struct {
-    dir: ?std.fs.Dir,
-    iterator: std.fs.Dir.Iterator,
+    dir: ?std.Io.Dir,
+    iterator: std.Io.Dir.Iterator,
     name_buffer: [256]u8 = undefined,
-    path_buffer: [std.fs.max_path_bytes]u8 = undefined,
+    path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined,
 
-    pub fn next(self: *@This()) !?serialport.Stub {
+    pub fn next(self: *@This(), io: std.Io) !?serialport.Stub {
         if (self.dir == null) return null;
 
         var result: serialport.Stub = undefined;
-        while (try self.iterator.next()) |entry| {
+        while (try self.iterator.next(io)) |entry| {
             if (entry.kind != .sym_link) continue;
             @memcpy(self.name_buffer[0..entry.name.len], entry.name);
             result.name = self.name_buffer[0..entry.name.len];
             @memcpy(self.path_buffer[0..18], "/dev/serial/by-id/");
             @memcpy(self.path_buffer[18 .. 18 + entry.name.len], entry.name);
-            result.path = try std.fs.realpath(
+            const len = try std.Io.Dir.realPathFileAbsolute(
+                io,
                 self.path_buffer[0 .. entry.name.len + 18],
                 &self.path_buffer,
             );
+            result.path = self.path_buffer[0..len];
             return result;
         } else {
             return null;
         }
     }
 
-    pub fn deinit(self: *@This()) void {
+    pub fn deinit(self: *@This(), io: std.Io) void {
         if (self.dir) |*d| {
-            d.close();
+            d.close(io);
         }
         self.* = undefined;
     }
 };
 
 fn openVirtualPorts(
-    master_port: *std.fs.File,
-    slave_port: *std.fs.File,
+    io: std.Io,
+    master_port: *std.Io.File,
+    slave_port: *std.Io.File,
 ) !void {
     const c = @cImport({
         @cDefine("_XOPEN_SOURCE", "700");
@@ -228,8 +229,8 @@ fn openVirtualPorts(
         @cInclude("unistd.h");
     });
 
-    master_port.* = try open("/dev/ptmx", .{ .mode = .read_write });
-    errdefer master_port.close();
+    master_port.* = try open(io, "/dev/ptmx", .{ .mode = .read_write });
+    errdefer master_port.close(io);
 
     if (c.grantpt(master_port.handle) < 0 or
         c.unlockpt(master_port.handle) < 0)
@@ -242,17 +243,19 @@ fn openVirtualPorts(
         return error.SlavePseudoTerminalSetupError;
 
     slave_port.* = try open(
+        io,
         slave_name[0..slave_name_len],
         .{ .mode = .read_write },
     );
 }
 
 test "software flow control" {
-    var master: std.fs.File = undefined;
-    var slave: std.fs.File = undefined;
-    try openVirtualPorts(&master, &slave);
-    defer master.close();
-    defer slave.close();
+    const io = std.testing.io;
+    var master: std.Io.File = undefined;
+    var slave: std.Io.File = undefined;
+    try openVirtualPorts(io, &master, &slave);
+    defer master.close(io);
+    defer slave.close(io);
 
     const config: serialport.Config = .{
         .baud_rate = .B230400,
@@ -264,9 +267,9 @@ test "software flow control" {
     const orig_slave = try configure(slave, config);
     defer std.posix.tcsetattr(slave.handle, .NOW, orig_slave) catch {};
 
-    var master_w = master.writerStreaming(&.{});
+    var master_w = master.writerStreaming(io, &.{});
     var reader_buf: [128]u8 = undefined;
-    var slave_r = slave.readerStreaming(&reader_buf);
+    var slave_r = slave.readerStreaming(io, &reader_buf);
 
     try std.testing.expectError(
         error.EndOfStream,
@@ -313,11 +316,12 @@ test "software flow control" {
 }
 
 test {
-    var master: std.fs.File = undefined;
-    var slave: std.fs.File = undefined;
-    try openVirtualPorts(&master, &slave);
-    defer master.close();
-    defer slave.close();
+    const io = std.testing.io;
+    var master: std.Io.File = undefined;
+    var slave: std.Io.File = undefined;
+    try openVirtualPorts(io, &master, &slave);
+    defer master.close(io);
+    defer slave.close(io);
 
     const config: serialport.Config = .{ .baud_rate = .B115200 };
     const orig_master = try configure(master, config);
@@ -325,9 +329,9 @@ test {
     const orig_slave = try configure(slave, config);
     defer std.posix.tcsetattr(slave.handle, .NOW, orig_slave) catch {};
 
-    var master_w = master.writerStreaming(&.{});
+    var master_w = master.writerStreaming(io, &.{});
     var reader_buf: [128]u8 = undefined;
-    var slave_r = slave.readerStreaming(&reader_buf);
+    var slave_r = slave.readerStreaming(io, &reader_buf);
 
     try std.testing.expectError(
         error.EndOfStream,
@@ -373,11 +377,12 @@ test {
 }
 
 test "nonblock read" {
-    var master: std.fs.File = undefined;
-    var slave: std.fs.File = undefined;
-    try openVirtualPorts(&master, &slave);
-    defer master.close();
-    defer slave.close();
+    const io = std.testing.io;
+    var master: std.Io.File = undefined;
+    var slave: std.Io.File = undefined;
+    try openVirtualPorts(io, &master, &slave);
+    defer master.close(io);
+    defer slave.close(io);
 
     const config: serialport.Config = .{ .baud_rate = .B115200 };
     const orig_master = try configure(master, config);
@@ -386,7 +391,7 @@ test "nonblock read" {
     defer std.posix.tcsetattr(slave.handle, .NOW, orig_slave) catch {};
 
     var reader_buf: [128]u8 = undefined;
-    var slave_r = slave.readerStreaming(&reader_buf);
+    var slave_r = slave.readerStreaming(io, &reader_buf);
 
     var result: [16]u8 = undefined;
     try std.testing.expectEqual(
@@ -396,11 +401,12 @@ test "nonblock read" {
 }
 
 test "custom baud rate" {
-    var master: std.fs.File = undefined;
-    var slave: std.fs.File = undefined;
-    try openVirtualPorts(&master, &slave);
-    defer master.close();
-    defer slave.close();
+    const io = std.testing.io;
+    var master: std.Io.File = undefined;
+    var slave: std.Io.File = undefined;
+    try openVirtualPorts(io, &master, &slave);
+    defer master.close(io);
+    defer slave.close(io);
 
     const config: serialport.Config = .{ .baud_rate = @enumFromInt(7667) };
     const orig_master = try configure(master, config);
@@ -408,9 +414,9 @@ test "custom baud rate" {
     const orig_slave = try configure(slave, config);
     defer std.posix.tcsetattr(slave.handle, .NOW, orig_slave) catch {};
 
-    var master_w = master.writerStreaming(&.{});
+    var master_w = master.writerStreaming(io, &.{});
     var reader_buf: [128]u8 = undefined;
-    var slave_r = slave.readerStreaming(&reader_buf);
+    var slave_r = slave.readerStreaming(io, &reader_buf);
 
     try std.testing.expectError(
         error.EndOfStream,
